@@ -33,7 +33,6 @@ SOFTWARE.
 #include <any>
 #include <array>
 #include <cerrno>
-#include <charconv>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -52,6 +51,10 @@ SOFTWARE.
 #include <utility>
 #include <variant>
 #include <vector>
+
+#ifndef ARGPARSE_NO_SCAN
+#include <charconv>
+#endif
 
 namespace argparse {
 
@@ -196,6 +199,8 @@ constexpr auto consume_hex_prefix(std::string_view s)
   return {false, s};
 }
 
+#ifndef ARGPARSE_NO_SCAN
+
 template <class T, auto Param>
 inline auto do_from_chars(std::string_view s) -> T {
   T x;
@@ -243,6 +248,7 @@ template <class T> struct parse_number<T> {
     return do_from_chars<T, radix_10>(rest);
   }
 };
+#endif
 
 namespace {
 
@@ -274,6 +280,8 @@ template <class T> inline auto do_strtod(std::string const &s) -> T {
   }
   return x; // unreachable
 }
+
+#ifndef ARGPARSE_NO_SCAN
 
 template <class T> struct parse_number<T, chars_format::general> {
   auto operator()(std::string const &s) -> T {
@@ -325,6 +333,7 @@ template <class T> struct parse_number<T, chars_format::fixed> {
     return do_strtod<T>(s);
   }
 };
+#endif // #ifndef ARGPARSE_NO_SCAN
 
 } // namespace details
 
@@ -419,6 +428,8 @@ public:
     return *this;
   }
 
+#ifndef ARGPARSE_NO_SCAN
+
   template <char Shape, typename T>
   auto scan() -> std::enable_if_t<std::is_arithmetic_v<T>, Argument &> {
     static_assert(!(std::is_const_v<T> || std::is_volatile_v<T>),
@@ -458,6 +469,7 @@ public:
 
     return *this;
   }
+#endif // #ifndef ARGPARSE_NO_SCAN
 
   Argument &nargs(std::size_t num_args) {
     m_num_args_range = NArgsRange{num_args, num_args};
