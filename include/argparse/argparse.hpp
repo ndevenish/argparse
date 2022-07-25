@@ -33,7 +33,6 @@ SOFTWARE.
 #include <any>
 #include <array>
 #include <cerrno>
-#include <charconv>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -52,6 +51,10 @@ SOFTWARE.
 #include <utility>
 #include <variant>
 #include <vector>
+
+#ifndef ARGPARSE_NO_SCAN
+#include <charconv>
+#endif
 
 namespace argparse {
 
@@ -196,6 +199,8 @@ constexpr auto consume_hex_prefix(std::string_view s)
   return {false, s};
 }
 
+#ifndef ARGPARSE_NO_SCAN
+
 template <class T, auto Param>
 inline auto do_from_chars(std::string_view s) -> T {
   T x;
@@ -243,6 +248,7 @@ template <class T> struct parse_number<T> {
     return do_from_chars<T, radix_10>(rest);
   }
 };
+#endif
 
 namespace {
 
@@ -274,6 +280,8 @@ template <class T> inline auto do_strtod(std::string const &s) -> T {
   }
   return x; // unreachable
 }
+
+#ifndef ARGPARSE_NO_SCAN
 
 template <class T> struct parse_number<T, chars_format::general> {
   auto operator()(std::string const &s) -> T {
@@ -325,6 +333,7 @@ template <class T> struct parse_number<T, chars_format::fixed> {
     return do_strtod<T>(s);
   }
 };
+#endif // #ifndef ARGPARSE_NO_SCAN
 
 template <typename StrIt>
 std::string join(StrIt first, StrIt last, const std::string &separator) {
@@ -439,6 +448,8 @@ public:
     return *this;
   }
 
+#ifndef ARGPARSE_NO_SCAN
+
   template <char Shape, typename T>
   auto scan() -> std::enable_if_t<std::is_arithmetic_v<T>, Argument &> {
     static_assert(!(std::is_const_v<T> || std::is_volatile_v<T>),
@@ -478,6 +489,7 @@ public:
 
     return *this;
   }
+#endif // #ifndef ARGPARSE_NO_SCAN
 
   Argument &nargs(std::size_t num_args) {
     m_num_args_range = NArgsRange{num_args, num_args};
@@ -1283,7 +1295,32 @@ private:
   /*
    * @throws std::runtime_error in case of any invalid argument
    */
-  void parse_args_internal(const std::vector<std::string> &arguments) {
+  void parse_args_internal(const std::vector<std::string> &raw_arguments) {
+    // Pre-process this argument list. Anything starting with "--", that
+    // contains an =, where the prefix before the = has an entry in the
+    // options table, should be split.
+    std::vector<std::string> arguments;
+    for (const auto &arg : raw_arguments) {
+      // Check that:
+      // - We don't have an argument named exactly this
+      // - The argument starts with "--"
+      // - The argument contains a "="
+      std::size_t eqpos = arg.find("=");
+      if (m_argument_map.find(arg) == m_argument_map.end() &&
+          arg.rfind("--", 0) == 0 && eqpos != std::string::npos) {
+        // Get the name of the potential option, and check it exists
+        std::string opt_name = arg.substr(0, eqpos);
+        if (m_argument_map.find(opt_name) != m_argument_map.end()) {
+          // This is the name of an option! Split it into two parts
+          arguments.push_back(std::move(opt_name));
+          arguments.push_back(arg.substr(eqpos + 1));
+          continue;
+        }
+      }
+      // If we've fallen through to here, then it's a standard argument
+      arguments.push_back(arg);
+    }
+
     if (m_program_name.empty() && !arguments.empty()) {
       m_program_name = arguments.front();
     }
