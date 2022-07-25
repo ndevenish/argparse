@@ -93,3 +93,8 @@ install(FILES "${PKG_CONFIG_FILE_NAME}"
 )
 
 include(CPack)
+
+add_executable(doc1 doc1.cc)
+target_link_libraries(doc1 argparse)
+add_executable(doc2 doc2.cc)
+target_link_libraries(doc2 argparse)
