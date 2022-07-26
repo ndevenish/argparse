@@ -18,7 +18,13 @@ string(REPLACE "/${CMAKE_LIBRARY_ARCHITECTURE}" "" CMAKE_INSTALL_LIBDIR_ARCHIND 
 add_library(argparse INTERFACE)
 add_library(argparse::argparse ALIAS argparse)
 
+include(CheckIncludeFileCXX)
+CHECK_INCLUDE_FILE_CXX(charconv HAVE_CHARCONV)
 
+if(NOT HAVE_CHARCONV)
+        message(STATUS "No <charconv>, disabling scan interface")
+        target_compile_definitions(argparse INTERFACE ARGPARSE_NO_SCAN)
+endif()
 if (ARGPARSE_LONG_VERSION_ARG_ONLY)
 	target_compile_definitions(argparse INTERFACE ARGPARSE_LONG_VERSION_ARG_ONLY=true)
 endif ()
