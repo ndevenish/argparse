@@ -373,9 +373,12 @@ inline default_arguments operator&(const default_arguments &a,
 }
 
 class ArgumentParser;
+class ArgumentParserMutuallyExclusiveGroup;
 
 class Argument {
   friend class ArgumentParser;
+  friend class ArgumentParserMutuallyExclusiveGroup;
+
   friend auto operator<<(std::ostream &stream, const ArgumentParser &parser)
       -> std::ostream &;
 
@@ -383,7 +386,7 @@ class Argument {
   explicit Argument(std::array<std::string_view, N> &&a,
                     std::index_sequence<I...> /*unused*/)
       : m_is_optional((is_optional(a[I]) || ...)), m_is_required(false),
-        m_is_repeatable(false), m_is_used(false) {
+        m_is_repeatable(false), m_is_used(false), m_in_group(false) {
     ((void)m_names.emplace_back(a[I]), ...);
     std::sort(
         m_names.begin(), m_names.end(), [](const auto &lhs, const auto &rhs) {
@@ -590,7 +593,7 @@ public:
         throw_required_arg_no_value_provided_error();
       }
     } else {
-      if (!m_num_args_range.contains(m_values.size()) && !m_default_value.has_value()) {
+      if (!m_in_group && !m_num_args_range.contains(m_values.size()) && !m_default_value.has_value()) {
         throw_nargs_range_validation_error();
       }
     }
@@ -598,25 +601,27 @@ public:
 
   std::string get_inline_usage() const {
     std::stringstream usage;
-    // Find the longest variant to show in the usage string
-    std::string longest_name = m_names[0];
-    for (const auto &s : m_names) {
-      if (s.size() > longest_name.size()) {
-        longest_name = s;
-      }
-    }
-    if (!m_is_required) {
+    if (!m_is_required && !m_in_group) {
       usage << "[";
     }
-    usage << longest_name;
-    const std::string metavar = m_metavar.size() > 0 ? m_metavar : "VAR";
-    if (m_num_args_range.get_max() > 0) {
-      usage << " " << metavar;
-      if (m_num_args_range.get_max() > 1) {
-        usage << "...";
+    if (!m_is_optional) {
+      if (!m_metavar.empty()) {
+        usage << " " << m_metavar;
+      } else {
+        usage << " " << m_names[0];
+      }
+    } else {
+      // Use the longest variant. Thankfully, these are pre-sorted
+      usage << m_names.back();
+      const std::string metavar = m_metavar.size() > 0 ? m_metavar : "VAR";
+      if (m_num_args_range.get_max() > 0) {
+        usage << " " << metavar;
+        if (m_num_args_range.get_max() > 1) {
+          usage << "...";
+        }
       }
     }
-    if (!m_is_required) {
+    if (!m_is_required && !m_in_group) {
       usage << "]";
     }
     return usage.str();
@@ -1020,7 +1025,63 @@ private:
   bool m_is_required : true;
   bool m_is_repeatable : true;
   bool m_is_used : true; // True if the optional argument is used by user
+  bool m_in_group : true; // Controls e.g. visibility in usage vs group
 };
+
+class ArgumentParserMutuallyExclusiveGroup {
+  friend class ArgumentParser;
+  friend auto operator<<(std::ostream &stream, const ArgumentParser &parser)
+      -> std::ostream &;
+
+    ArgumentParserMutuallyExclusiveGroup(ArgumentParserMutuallyExclusiveGroup&) = delete;
+public:
+    ArgumentParserMutuallyExclusiveGroup(ArgumentParser &parser, bool required) : m_parser(parser), m_required(required) {}
+
+  std::string get_inline_usage() const {
+    std::stringstream usage;
+    usage << (m_required ? "( " : "[ ");
+
+    // Make an internal list of all the options, then join in
+    std::vector<std::string> options;
+
+    for (const Argument &arg : m_arguments)  {
+      options.push_back((arg).get_inline_usage());
+    }
+    usage << details::join(options.begin(), options.end(), " | ");
+    usage << (m_required ? " )" : " ]");
+    
+    return usage.str();
+  }
+
+  auto validate() const -> bool {
+    // Validate that 
+    // - if required, we have one argument
+    // - we don't have more than one argument
+    std::optional<std::reference_wrapper<Argument>> used;
+    for (Argument &arg : m_arguments) {
+      if (arg.m_is_used) {
+        if (used) {
+          throw std::runtime_error("Got mutually exclusive argument error: Both '" + used.value().get().m_names.back() + "' and '" + (arg.m_metavar.empty() ? arg.m_names.back() : arg.m_metavar) + "' specified.");
+        }
+        used = arg;
+      }
+    }
+    if (m_required && !used) {
+      throw std::runtime_error("Missing option from required mutually exclusive group '" + get_inline_usage() + "'");
+    }
+    return true;
+  }
+
+  template <typename... Targs> Argument &add_argument(Targs... f_args);
+
+  
+private:
+  ArgumentParser &m_parser;
+  std::list<std::reference_wrapper<Argument>> m_arguments;
+  bool m_has_positional = false;
+  bool m_required;
+};
+
 
 class ArgumentParser {
 public:
@@ -1136,6 +1197,10 @@ public:
     // Check if all arguments are parsed
     for ([[maybe_unused]] const auto& [unused, argument] : m_argument_map) {
       argument->validate();
+    }
+    // Check that all the groups are correctly exclusive
+    for (const auto &group : m_exclusive_groups) {
+      group.validate();
     }
   }
 
@@ -1262,7 +1327,9 @@ public:
 
     // Add any options inline here
     for (const auto &argument : this->m_optional_arguments) {
-      if (argument.m_names[0] == "-v") {
+      if (argument.m_in_group) {
+        continue;
+      } else if (argument.m_names[0] == "-v") {
         continue;
       } else if (argument.m_names[0] == "-h") {
         stream << " [-h]";
@@ -1272,14 +1339,25 @@ public:
     }
     // Put positional arguments after the optionals
     for (const auto &argument : this->m_positional_arguments) {
-      if (!argument.m_metavar.empty()) {
+      if (argument.m_in_group) {
+        continue;
+      } else if (!argument.m_metavar.empty()) {
         stream << " " << argument.m_metavar;
       } else {
         stream << " " << argument.m_names.front();
       }
     }
 
+    // Finally, treat any mutually exclusive groups
+    for (const auto &group : this->m_exclusive_groups) {
+      stream << " " << group.get_inline_usage();
+    }
     return stream.str();
+  }
+
+  auto add_mutually_exclusive_group(bool required = false) -> ArgumentParserMutuallyExclusiveGroup & {
+    auto &group = m_exclusive_groups.emplace_back(*this, required);
+    return group;
   }
 
   // Printing the one and only help message
@@ -1390,7 +1468,27 @@ private:
   bool m_is_parsed = false;
   std::list<Argument> m_positional_arguments;
   std::list<Argument> m_optional_arguments;
+  std::list<ArgumentParserMutuallyExclusiveGroup> m_exclusive_groups;
   std::map<std::string_view, list_iterator, std::less<>> m_argument_map;
 };
+
+// Parameter packing
+// Call add_argument with variadic number of string arguments
+template <typename... Targs> Argument &ArgumentParserMutuallyExclusiveGroup::add_argument(Targs... f_args) {
+  using array_of_sv = std::array<std::string_view, sizeof...(Targs)>;
+  // auto argument = m_parser.add_argument(f_args...);
+  // argument.m_in_group = true;
+  auto argument_test = Argument{array_of_sv{f_args...}};
+  if (!argument_test.m_is_optional) {
+    if (m_has_positional) {
+      throw std::logic_error("Only one positional allowed per mutually exclusive group");
+    }
+    m_has_positional = true;
+  }
+  auto &argument = m_parser.add_argument<Targs...>(f_args...);
+  argument.m_in_group = true;
+  m_arguments.push_back(argument);
+  return argument;
+}
 
 } // namespace argparse
