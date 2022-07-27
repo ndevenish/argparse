@@ -1377,8 +1377,6 @@ public:
       std::string term;
       if (argument.m_in_group) {
         continue;
-      } else if (argument.m_names[0] == "-v") {
-        continue;
       } else if (argument.m_names[0] == "-h") {
         term = " [-h]";
       } else {
