@@ -350,6 +350,14 @@ std::string join(StrIt first, StrIt last, const std::string &separator) {
   return value.str();
 }
 
+std::size_t get_screen_width() {
+  char *c = std::getenv("COLUMNS");
+  if (c == nullptr) {
+    return 80;
+  }
+  return std::stoi(c);
+}
+
 } // namespace details
 
 enum class nargs_pattern {
@@ -1325,32 +1333,59 @@ public:
 
     stream << "Usage: " << this->m_program_name;
 
+    // Geometry for managing wrapping
+    std::size_t screen_width = details::get_screen_width();
+    std::size_t program_indent = 7 + this->m_program_name.size();
+    std::size_t width = program_indent;
+
     // Add any options inline here
     for (const auto &argument : this->m_optional_arguments) {
+      std::string term;
       if (argument.m_in_group) {
         continue;
       } else if (argument.m_names[0] == "-v") {
         continue;
       } else if (argument.m_names[0] == "-h") {
-        stream << " [-h]";
+        term = " [-h]";
       } else {
-        stream << " " << argument.get_inline_usage();
+        term = " " + argument.get_inline_usage();
       }
+      if (width + term.size() > screen_width) {
+        stream << "\n" << std::string(program_indent, ' ');
+        // stream << ;
+        // for (int i = 0; i < program_indent; ++i) stream << " ";
+        width = program_indent;
+      }
+      stream << term;
+      width += term.size();
     }
     // Put positional arguments after the optionals
     for (const auto &argument : this->m_positional_arguments) {
+      std::string term;
       if (argument.m_in_group) {
         continue;
       } else if (!argument.m_metavar.empty()) {
-        stream << " " << argument.m_metavar;
+        term = " " + argument.m_metavar;
       } else {
-        stream << " " << argument.m_names.front();
+        term = " " + argument.m_names.front();
       }
+      if (width + term.size() > screen_width) {
+        stream << "\n" << std::string(program_indent, ' ');
+        width = program_indent;
+      }
+      stream << term;
+      width+= term.size();
     }
 
     // Finally, treat any mutually exclusive groups
     for (const auto &group : this->m_exclusive_groups) {
-      stream << " " << group.get_inline_usage();
+      std::string term = " " + group.get_inline_usage();
+      if (width + term.size() > screen_width) {
+        stream << "\n" << std::string(program_indent, ' ');
+        width = program_indent;
+      }
+      stream << term;
+      width+= term.size();
     }
     return stream.str();
   }
