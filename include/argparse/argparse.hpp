@@ -350,7 +350,7 @@ std::string join(StrIt first, StrIt last, const std::string &separator) {
   return value.str();
 }
 
-std::size_t get_screen_width() {
+inline std::size_t get_screen_width() {
   char *c = std::getenv("COLUMNS");
   if (c == nullptr) {
     return 80;
@@ -660,6 +660,14 @@ public:
 
   friend std::ostream &operator<<(std::ostream &stream,
                                   const Argument &argument) {
+    // Geometry for managing wrapping
+    std::size_t screen_width = details::get_screen_width();
+    // The stream is already set to the maximum argument name values width
+    // 3 = indent between names and help (including token starter)
+    std::size_t help_indent = stream.width() + 3;
+    std::size_t width = help_indent;
+    // std::cout << "Screen: " << screen_width << ", stream: " << stream.width() << std::endl;
+
     std::stringstream name_stream;
     name_stream << "  "; // indent
     if (argument.is_positional(argument.m_names.front())) {
@@ -678,19 +686,45 @@ public:
         name_stream << " " << argument.m_metavar;
       }
     }
-    stream << name_stream.str() << "\t" << argument.m_help;
+    stream << name_stream.str() << "   ";
+    
+    // Now, we can stream the help message. Let's wrap this over the screen width
+    std::istringstream help(argument.m_help);
+    std::string token;
+    while (std::getline(help, token, ' ')) {
+      if (token.size() + width + 1 > screen_width) {
+        stream << "\n" << std::string(help_indent, ' ' );
+        width = help_indent;
+      }
+      stream << " " << token;
+      width += token.size() + 1;
+    }
+
+    // stream << argument.m_help;
 
     if (argument.m_default_value.has_value() &&
         argument.m_num_args_range != NArgsRange{0, 0}) {
+      std::string default_msg;
       if (!argument.m_help.empty()) {
-        stream << " ";
+        default_msg = " ";
       }
-      stream << "[default: " << argument.m_default_value_repr << "]";
+      default_msg += "[default: " + argument.m_default_value_repr + "]";
+      if (default_msg.size() + width > screen_width) {
+        stream << "\n" << std::string(help_indent, ' ' );
+        width = help_indent;
+      }
+      stream << default_msg;
     } else if (argument.m_is_required) {
+      std::string required_msg;
       if (!argument.m_help.empty()) {
-        stream << " ";
+        required_msg = " ";
       }
-      stream << "[required]";
+      required_msg += "[required]";
+      if (required_msg.size() + width > screen_width) {
+        stream << "\n" << std::string(help_indent, ' ');
+        width = help_indent;
+      }
+      stream << required_msg;
     }
     stream << "\n";
     return stream;
